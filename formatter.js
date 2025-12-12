@@ -1,6 +1,6 @@
 (function() {
     console.clear();
-    console.log("%c🚀 STARTING AGGRESSIVE SIDEBAR MANAGER...", "background: red; color: white; font-weight: bold; padding: 4px;");
+    console.log("%c🚀 STARTING CSS-BASED SIDEBAR ENFORCER...", "background: #059669; color: white; font-weight: bold; padding: 4px;");
 
     const CONFIG = {
         PANEL_TITLE: "Sidebar Manager",
@@ -8,14 +8,7 @@
         AUTH_TOKEN: window.TOKEN || "" 
     };
 
-    // Global State
-    let CACHED_STATE = {
-        order: [],
-        hidden: [],
-        isLoaded: false
-    };
-
-    let isApplying = false;
+    let CACHED_STATE = { order: [], hidden: [], isLoaded: false };
 
     // ================= 1. HELPERS =================
     function getLocationId() {
@@ -24,11 +17,9 @@
     }
 
     function findSidebar() {
-        // Broad search to catch it even if GHL changes IDs
         return document.querySelector('#sidebar-v2 nav') || 
                document.querySelector('.sidebar-v2-location nav') ||
-               document.querySelector('.hl_nav-header nav') ||
-               document.querySelector('nav'); 
+               document.querySelector('.hl_nav-header nav'); 
     }
 
     function getLabel(el) {
@@ -36,22 +27,16 @@
         return textNode ? textNode.innerText.trim() : (el.innerText.trim() || el.id);
     }
 
-    // ================= 2. API FUNCTIONS (FIXED PARSING) =================
+    // ================= 2. API =================
     async function fetchMenuData() {
-        const url = `${CONFIG.API_BASE}/side-menu/${getLocationId()}?t=${Date.now()}`;
-        console.log(`📥 Fetching: ${url}`);
-
         try {
+            const url = `${CONFIG.API_BASE}/side-menu/${getLocationId()}?t=${Date.now()}`;
             const res = await fetch(url, {
                 headers: { 'Content-Type': 'application/json', 'x-theme-key': CONFIG.AUTH_TOKEN }
             });
-            
             if (res.status === 404) return;
-
             const raw = await res.json();
-            console.log("📦 RAW RESPONSE:", raw);
 
-            // ✅ SPECIFIC PARSING FOR YOUR RESPONSE STRUCTURE
             let newOrder = [];
             let newHidden = [];
 
@@ -63,14 +48,13 @@
                 newHidden = raw.hidden;
             }
 
-            // Update Cache
             CACHED_STATE.order = newOrder;
             CACHED_STATE.hidden = newHidden;
             CACHED_STATE.isLoaded = true;
-
-            console.log("✅ State Loaded:", CACHED_STATE);
-
-            // Force Apply Immediately
+            
+            console.log("✅ Config Loaded:", CACHED_STATE);
+            
+            // Apply immediately upon load
             const nav = findSidebar();
             if(nav) applyDOMChanges(nav);
 
@@ -80,7 +64,6 @@
     }
 
     function postMenuData(order, hidden) {
-        // Update Local Cache Optimistically
         CACHED_STATE.order = order;
         CACHED_STATE.hidden = hidden;
         CACHED_STATE.isLoaded = true;
@@ -95,71 +78,56 @@
         });
     }
 
-    function resetMenuData() {
-        if(!confirm("Reset layout?")) return;
-        fetch(`${CONFIG.API_BASE}/side-menu/${getLocationId()}`, {
-            method: 'DELETE',
-            headers: { 'Content-Type': 'application/json', 'x-theme-key': CONFIG.AUTH_TOKEN }
-        }).then(() => location.reload());
-    }
-
-    // ================= 3. DOM ENFORCER (PERMANENT) =================
+    // ================= 3. CSS ENFORCER (THE FIX) =================
     function applyDOMChanges(nav) {
-        if (!CACHED_STATE.isLoaded || !nav || isApplying) return;
-
-        // Don't do anything if we have no config
-        if (CACHED_STATE.order.length === 0 && CACHED_STATE.hidden.length === 0) return;
-
-        isApplying = true;
+        if (!CACHED_STATE.isLoaded || !nav) return;
 
         const { order, hidden } = CACHED_STATE;
 
-        // 1. REORDERING
-        // We iterate through our saved order and append elements to the end.
-        // This effectively sorts them without needing complex logic.
-        order.forEach(id => {
+        // Ensure the container is a flex container
+        nav.style.display = "flex";
+        nav.style.flexDirection = "column";
+
+        // 1. Reset all items first
+        const allItems = nav.querySelectorAll('li, a');
+        allItems.forEach(el => {
+            el.style.order = "9999"; // Default to bottom
+            el.style.display = "";   // Default to visible
+        });
+
+        // 2. Apply Order using CSS 'order' property
+        // This is much more stable than moving DOM elements
+        order.forEach((id, index) => {
             const el = document.getElementById(id);
             if (el) {
-                // Determine the movable container (usually the LI)
+                // Apply to the direct child of the flex container (nav)
                 const container = el.closest('li') || el.closest('a') || el;
-                // Only move if it's currently inside the nav
                 if (container.parentElement === nav) {
-                    nav.appendChild(container);
+                    container.style.order = index; // CSS Order ID
                 }
             }
         });
 
-        // 2. VISIBILITY (Force Hiding)
-        // First, ensure non-hidden items are visible (fix for potential GHL flickering)
-        nav.querySelectorAll('li, a').forEach(el => {
-            if(el.id && !hidden.includes(el.id)) {
-                el.style.display = ''; 
-            }
-        });
-
-        // Now hide the items in our blacklist
+        // 3. Apply Hidden using CSS
         hidden.forEach(id => {
             const el = document.getElementById(id);
-            if(el) {
+            if (el) {
                 const container = el.closest('li') || el.closest('a') || el;
-                container.style.display = 'none';
+                container.style.display = "none !important";
+                container.setAttribute('hidden', 'true'); // Helper attribute
             }
         });
-
-        // Unlock after short delay
-        setTimeout(() => isApplying = false, 50);
     }
 
     // ================= 4. UI PANEL =================
     function createPanel(nav) {
-        const existing = document.getElementById("ghl-sidebar-manager");
-        if (existing) existing.remove();
+        if (document.getElementById("ghl-sidebar-manager")) return;
 
         const panel = document.createElement("div");
         panel.id = "ghl-sidebar-manager";
         panel.style.cssText = `
             position: fixed; top: 100px; right: 20px; width: 280px; 
-            background: white; border: 2px solid #3b82f6; z-index: 99999999; 
+            background: white; border: 2px solid #059669; z-index: 99999999; 
             padding: 16px; border-radius: 8px; box-shadow: 0 10px 50px rgba(0,0,0,0.3);
             font-family: sans-serif; max-height: 80vh; overflow-y: auto;
         `;
@@ -200,11 +168,6 @@
                 const hide = btn.innerText === '👁️';
                 btn.innerText = hide ? '🙈' : '👁️';
                 li.style.background = hide ? '#fee2e2' : '#f3f4f6';
-                
-                // Realtime Preview
-                const domEl = document.getElementById(el.id);
-                const container = domEl ? (domEl.closest('li') || domEl) : null;
-                if(container) container.style.display = hide ? 'none' : '';
             });
 
             li.addEventListener('dragstart', () => li.classList.add('dragging'));
@@ -225,44 +188,36 @@
         document.getElementById('ghl-save-btn').addEventListener('click', () => {
             const newOrder = [...list.querySelectorAll('li')].map(li => li.dataset.id);
             const newHidden = [...list.querySelectorAll('li')].filter(li => li.querySelector('.toggle-eye').innerText === '🙈').map(li => li.dataset.id);
+            
             postMenuData(newOrder, newHidden);
             applyDOMChanges(nav);
         });
+
         document.getElementById('ghl-close-btn').addEventListener('click', () => panel.remove());
-        document.getElementById('ghl-reset-btn').addEventListener('click', resetMenuData);
+        document.getElementById('ghl-reset-btn').addEventListener('click', () => {
+             if(confirm("Reset?")) {
+                 fetch(`${CONFIG.API_BASE}/side-menu/${getLocationId()}`, { method: 'DELETE', headers: {'x-theme-key': CONFIG.AUTH_TOKEN }})
+                 .then(()=>location.reload());
+             }
+        });
     }
 
     // ================= 5. MAIN EXECUTION =================
-    
-    // We use an interval to "catch" the sidebar whenever GHL renders it
-    setInterval(async () => {
-        const nav = findSidebar();
-
-        if (nav) {
-            // 1. Initial Data Load (Only once)
-            if (!CACHED_STATE.isLoaded) {
-                console.log("✅ Sidebar detected. Initializing...");
-                await fetchMenuData();
+    // Initialize once
+    fetchMenuData().then(() => {
+        // Continuous check to enforce CSS rules
+        setInterval(() => {
+            const nav = findSidebar();
+            if (nav) {
+                // Ensure our styles stick
                 applyDOMChanges(nav);
-                createPanel(nav);
-
-                // 2. Start the PERMANENT Watchdog
-                // This Observer will fire EVERY time GHL changes the sidebar DOM
-                const observer = new MutationObserver(() => {
-                    if (!isApplying) {
-                        // console.log("GHL reset sidebar -> Re-applying our order...");
-                        applyDOMChanges(nav);
-                    }
-                });
-                observer.observe(nav, { childList: true, subtree: true });
-            } 
-            // 3. Constant Enforcement
-            // Even if observer misses something, ensure order is correct every 2 seconds via this loop,
-            // but only if we aren't currently dragging/applying.
-            else if (!isApplying) {
-                applyDOMChanges(nav);
+                
+                // Keep panel alive if sidebar exists
+                if (!document.getElementById("ghl-sidebar-manager")) {
+                    createPanel(nav);
+                }
             }
-        }
-    }, 1000); // Check every 1 second
+        }, 500);
+    });
 
 })();
