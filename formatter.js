@@ -1,6 +1,6 @@
 (function() {
     console.clear();
-    console.log("🚀 Starting Persistent Sidebar Manager...");
+    console.log("🚀 Starting Sidebar Enforcer (MutationObserver Version)...");
 
     const CONFIG = {
         PANEL_TITLE: "Sidebar Manager",
@@ -8,12 +8,16 @@
         AUTH_TOKEN: window.TOKEN || "" 
     };
 
-    // Store state globally within closure so we don't have to fetch API constantly
+    // Global State to hold data without re-fetching
     let CACHED_STATE = {
         order: [],
         hidden: [],
         isLoaded: false
     };
+
+    // To prevent infinite loops when we modify the DOM
+    let isApplyingChanges = false;
+    let sidebarObserver = null;
 
     // ================= 1. HELPERS =================
     function getLocationId() {
@@ -38,24 +42,25 @@
             const res = await fetch(`${CONFIG.API_BASE}/side-menu/${getLocationId()}`, {
                 headers: { 'Content-Type': 'application/json', 'x-theme-key': CONFIG.AUTH_TOKEN }
             });
-            if (res.status === 404) return { order: [], hidden: [] };
+            if (res.status === 404) return; 
             const data = await res.json();
             
             // Update Cache
             CACHED_STATE.order = data.order || [];
             CACHED_STATE.hidden = data.hidden || [];
             CACHED_STATE.isLoaded = true;
-            
             console.log("✅ Config Loaded:", CACHED_STATE);
-            return CACHED_STATE;
+            
+            // Trigger immediate application
+            const nav = findSidebar();
+            if(nav) applyDOMChanges(nav);
+
         } catch (err) {
-            console.warn("API Error, using cache or empty:", err);
-            return CACHED_STATE;
+            console.warn("API Error:", err);
         }
     }
 
     function postMenuData(order, hidden) {
-        // Update Cache Immediately for UI responsiveness
         CACHED_STATE.order = order;
         CACHED_STATE.hidden = hidden;
 
@@ -77,37 +82,43 @@
         }).then(() => location.reload());
     }
 
-    // ================= 3. DOM MANIPULATION (The Fix) =================
+    // ================= 3. DOM ENFORCER (The Fix) =================
     function applyDOMChanges(nav) {
-        if (!CACHED_STATE.isLoaded || !nav) return;
+        if (!CACHED_STATE.isLoaded || !nav || isApplyingChanges) return;
+
+        // Lock to prevent observer loop
+        isApplyingChanges = true;
 
         const { order, hidden } = CACHED_STATE;
 
-        // 1. Reorder
+        // 1. Enforce Order
+        // We appendChild in the saved order. This effectively sorts them.
         if (order && order.length > 0) {
             order.forEach(id => {
                 const el = document.getElementById(id);
+                // Get the draggable container (usually the LI)
                 const container = el ? (el.closest('li') || el) : null;
-                // Only move if it's not already at the bottom (optimization)
+                
+                // Only move if it is not already in the correct position relative to siblings
                 if (container && container.parentElement === nav) {
-                    nav.appendChild(container); 
+                     nav.appendChild(container); 
                 }
             });
         }
 
-        // 2. Hide/Show
-        nav.querySelectorAll('[id]').forEach(item => {
-            // Filter valid items
-            if(!item.id.includes('sb_') && !item.id.includes('menu')) return;
-            
-            const container = item.closest('li') || item;
-            
-            if (hidden.includes(item.id)) {
-                container.style.display = 'none';
-            } else {
-                container.style.display = '';
-            }
+        // 2. Enforce Visibility
+        // Show everything first to ensure clean state
+        nav.querySelectorAll('li, a').forEach(el => el.style.display = '');
+
+        // Hide specific items
+        hidden.forEach(id => {
+            const el = document.getElementById(id);
+            const container = el ? (el.closest('li') || el) : null;
+            if(container) container.style.display = 'none';
         });
+
+        // Unlock
+        setTimeout(() => isApplyingChanges = false, 50);
     }
 
     // ================= 4. UI PANEL =================
@@ -129,6 +140,7 @@
                 <h3 style="margin:0; font-size:16px; font-weight:bold;">${CONFIG.PANEL_TITLE}</h3>
                 <button id="ghl-close-btn" style="border:none; bg:transparent; cursor:pointer;">❌</button>
             </div>
+            <p style="font-size:12px; color:#666; margin-bottom:10px;">Drag to reorder.</p>
             <ul id="ghl-sort-list" style="list-style:none; padding:0; margin:0;"></ul>
             <div style="display:flex; gap:10px; margin-top:15px;">
                 <button id="ghl-save-btn" style="flex:1; padding:8px; background:#3b82f6; color:white; border:none; border-radius:4px; cursor:pointer; font-weight:bold;">Save Changes</button>
@@ -138,8 +150,8 @@
         document.body.appendChild(panel);
 
         const list = panel.querySelector("#ghl-sort-list");
-        const items = Array.from(nav.querySelectorAll('a[id], li[id]'))
-            .filter(el => el.id && (el.id.includes('sb_') || el.id.includes('menu')));
+        // Get items based on current DOM state (which is enforced by applyDOMChanges)
+        const items = Array.from(nav.querySelectorAll('li, a')).filter(el => el.id && (el.id.includes('sb_') || el.id.includes('menu')));
 
         items.forEach(el => {
             const isHidden = CACHED_STATE.hidden.includes(el.id);
@@ -161,15 +173,13 @@
                 </button>
             `;
 
-            // Toggle Click
             li.querySelector('.toggle-eye').addEventListener('click', (e) => {
                 const btn = e.target;
                 const hide = btn.innerText === '👁️';
                 btn.innerText = hide ? '🙈' : '👁️';
                 li.style.background = hide ? '#fee2e2' : '#f3f4f6';
-                li.style.borderColor = hide ? '#fecaca' : '#e5e7eb';
                 
-                // Immediate Preview
+                // Immediate Preview (handled by UI logic temporarily)
                 const domEl = document.getElementById(el.id);
                 const container = domEl ? (domEl.closest('li') || domEl) : null;
                 if(container) container.style.display = hide ? 'none' : '';
@@ -194,41 +204,45 @@
         // Save
         document.getElementById('ghl-save-btn').addEventListener('click', () => {
             const newOrder = [...list.querySelectorAll('li')].map(li => li.dataset.id);
-            const newHidden = [...list.querySelectorAll('li')]
-                .filter(li => li.querySelector('.toggle-eye').innerText === '🙈')
-                .map(li => li.dataset.id);
+            const newHidden = [...list.querySelectorAll('li')].filter(li => li.querySelector('.toggle-eye').innerText === '🙈').map(li => li.dataset.id);
             
             postMenuData(newOrder, newHidden);
-            applyDOMChanges(nav);
+            applyDOMChanges(nav); // Force apply immediately
         });
 
         document.getElementById('ghl-close-btn').addEventListener('click', () => panel.remove());
         document.getElementById('ghl-reset-btn').addEventListener('click', resetMenuData);
     }
 
-    // ================= 5. MAIN LOOP (Watchdog) =================
-    // This loop runs continuously to find the sidebar AND re-apply changes if GHL refreshes the DOM
-    let initComplete = false;
-
-    setInterval(async () => {
+    // ================= 5. INITIALIZATION & OBSERVER =================
+    // This part ensures we find the sidebar AND keep it updated if GHL refreshes it
+    const initInterval = setInterval(async () => {
         const nav = findSidebar();
-
+        
         if (nav) {
-            // 1. Initial Load (Runs once)
-            if (!initComplete) {
-                console.log("✅ Sidebar detected. Initializing...");
-                await fetchMenuData(); // Load from API
-                applyDOMChanges(nav);  // Apply immediately
-                createPanel(nav);      // Draw UI
-                initComplete = true;
-            } 
-            
-            // 2. Watchdog: Re-apply if data is loaded but sidebar looks wrong
-            // (e.g. GHL re-rendered the menu and reset the order)
-            if (CACHED_STATE.isLoaded) {
-               applyDOMChanges(nav);
+            // Only stop interval if we haven't loaded data yet
+            if (!CACHED_STATE.isLoaded) {
+                console.log("✅ Sidebar Found. Initializing...");
+                await fetchMenuData();
+                applyDOMChanges(nav);
+                createPanel(nav);
+
+                // --- START OBSERVER ---
+                // This watches for GHL overwriting our changes
+                if (sidebarObserver) sidebarObserver.disconnect();
+                
+                sidebarObserver = new MutationObserver((mutations) => {
+                    if (isApplyingChanges) return; // Ignore our own changes
+                    // console.log("GHL updated sidebar. Re-enforcing order...");
+                    applyDOMChanges(nav);
+                });
+                
+                sidebarObserver.observe(nav, { childList: true, subtree: true });
+                // --- END OBSERVER ---
+                
+                clearInterval(initInterval);
             }
         }
-    }, 500); // Check every 500ms
+    }, 500);
 
 })();
