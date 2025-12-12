@@ -1,6 +1,6 @@
 (function() {
     console.clear();
-    console.log("%c🚀 STARTING FINAL SYNCED SIDEBAR MANAGER...", "background: #7c3aed; color: white; font-weight: bold; padding: 4px;");
+    console.log("%c🚀 STARTING ZERO-LATENCY SIDEBAR MANAGER...", "background: #059669; color: white; font-weight: bold; padding: 4px;");
 
     const CONFIG = {
         PANEL_TITLE: "Sidebar Manager",
@@ -8,8 +8,12 @@
         AUTH_TOKEN: window.TOKEN || "" 
     };
 
+    // Helper to generate a unique cache key per sub-account
+    function getCacheKey() {
+        return `ghl_sidebar_cache_${getLocationId()}`;
+    }
+
     let CACHED_STATE = { order: [], hidden: [], isLoaded: false };
-    let isApplying = false;
 
     // ================= 1. HELPERS =================
     function getLocationId() {
@@ -37,10 +41,36 @@
         return textNode ? textNode.innerText.trim() : (el.innerText.trim() || el.id);
     }
 
-    // ================= 2. API FUNCTIONS (LOGGING RESTORED) =================
+    // ================= 2. DATA MANAGEMENT (CACHE + API) =================
+    
+    // Load from LocalStorage (Instant)
+    function loadFromLocalCache() {
+        try {
+            const raw = localStorage.getItem(getCacheKey());
+            if (raw) {
+                const data = JSON.parse(raw);
+                CACHED_STATE.order = data.order || [];
+                CACHED_STATE.hidden = data.hidden || [];
+                CACHED_STATE.isLoaded = true;
+                console.log("⚡ Loaded from Local Cache (Instant Apply)");
+                return true;
+            }
+        } catch (e) {
+            console.warn("Cache parse error", e);
+        }
+        return false;
+    }
+
+    // Load from API (Background Sync)
     async function fetchMenuData() {
         const id = getLocationId();
-        console.log(`📥 Fetching config for: ${id}`);
+        
+        // 1. Try applying from cache first for speed
+        const hasCache = loadFromLocalCache();
+        const nav = findSidebar();
+        if (hasCache && nav) applyDOMChanges(nav);
+
+        console.log(`📥 Syncing with API: ${id}`);
         
         try {
             const url = `${CONFIG.API_BASE}/side-menu/${id}?t=${Date.now()}`;
@@ -48,13 +78,8 @@
                 headers: { 'Content-Type': 'application/json', 'x-theme-key': CONFIG.AUTH_TOKEN }
             });
             
-            if (res.status === 404) {
-                console.log("⚠️ No config found (404). Starting fresh.");
-                return;
-            }
-            
+            if (res.status === 404) return;
             const raw = await res.json();
-            console.log("📦 RAW API RESPONSE:", raw); // ✅ LOG RESTORED
 
             let newOrder = [];
             let newHidden = [];
@@ -67,56 +92,77 @@
                 newHidden = raw.hidden;
             }
 
+            // Update State
             CACHED_STATE.order = newOrder;
             CACHED_STATE.hidden = newHidden;
             CACHED_STATE.isLoaded = true;
-            console.log("✅ State Loaded & Cached:", CACHED_STATE);
+
+            // Save to LocalStorage for next time
+            localStorage.setItem(getCacheKey(), JSON.stringify({ order: newOrder, hidden: newHidden }));
             
-            // Force apply immediately
-            const nav = findSidebar();
+            console.log("✅ API Sync Complete");
+            
+            // Re-apply in case API had newer data than cache
             if(nav) {
                 applyDOMChanges(nav);
-                // If panel exists, refresh it to match new data
+                // Refresh panel if open
                 if(document.getElementById("ghl-sidebar-manager")) createPanel(nav);
             }
 
         } catch (err) {
-            console.error("API Error:", err);
+            console.error("API Error (Using Cache):", err);
         }
     }
 
     function postMenuData(order, hidden) {
         const id = getLocationId();
         
-        // Optimistic Update
+        // 1. Update State & Cache Immediately
         CACHED_STATE.order = order;
         CACHED_STATE.hidden = hidden;
         CACHED_STATE.isLoaded = true;
+        localStorage.setItem(getCacheKey(), JSON.stringify({ order, hidden }));
 
-        console.log("📤 Saving Data...", { order, hidden });
+        console.log("📤 Saving Data...");
 
+        // 2. Send to API in background
         fetch(`${CONFIG.API_BASE}/side-menu/save/${id}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'x-theme-key': CONFIG.AUTH_TOKEN },
             body: JSON.stringify({ order, hidden })
         }).then(async (res) => {
-            const json = await res.json();
-            console.log("✅ Save Response:", json); // ✅ LOG RESTORED
-            
             const btn = document.getElementById('ghl-save-btn');
             if(btn) { btn.innerText = "Saved! ✅"; setTimeout(() => btn.innerText = "Save Changes", 2000); }
         });
     }
 
     function resetMenuData() {
-        if(!confirm("Reset layout?")) return;
+        if(!confirm("Reset sidebar layout to default?")) return;
         const id = getLocationId();
-        console.log(`🗑️ Resetting ${id}...`);
         
+        // 1. Clear Cache & State
+        localStorage.removeItem(getCacheKey());
+        CACHED_STATE = { order: [], hidden: [], isLoaded: true };
+        
+        // 2. Instant Visual Reset (No Reload needed)
+        const nav = findSidebar();
+        if(nav) {
+            // Reset CSS
+            nav.querySelectorAll('li, a').forEach(el => {
+                el.style.order = "9999";
+                el.style.display = "";
+            });
+            // Update Panel if open
+            if(document.getElementById("ghl-sidebar-manager")) createPanel(nav);
+        }
+
+        // 3. Call API Delete
         fetch(`${CONFIG.API_BASE}/side-menu/${id}`, {
             method: 'DELETE',
             headers: { 'Content-Type': 'application/json', 'x-theme-key': CONFIG.AUTH_TOKEN }
-        }).then(() => location.reload());
+        }).then(() => {
+            console.log("✅ API Reset Complete");
+        });
     }
 
     // ================= 3. CSS ENFORCER =================
@@ -157,7 +203,7 @@
         });
     }
 
-    // ================= 4. UI PANEL (FIXED SORTING) =================
+    // ================= 4. UI PANEL =================
     function createPanel(nav) {
         const existing = document.getElementById("ghl-sidebar-manager");
         if (existing) existing.remove();
@@ -187,26 +233,22 @@
 
         const list = panel.querySelector("#ghl-sort-list");
         
-        // --- ⚡ CRITICAL FIX: Merge Saved Order with DOM items ---
+        // Merge Saved Order with current DOM items
         const domItems = Array.from(nav.querySelectorAll('li, a')).filter(el => el.id && (el.id.includes('sb_') || el.id.includes('menu')));
         let displayItems = [];
 
-        // 1. Add saved items first (in saved order)
+        // Add saved items first
         CACHED_STATE.order.forEach(savedId => {
             const found = domItems.find(el => el.id === savedId);
-            if (found) {
-                displayItems.push(found);
-            }
+            if (found) displayItems.push(found);
         });
 
-        // 2. Add any remaining DOM items that weren't in the save list (new features etc)
+        // Add remaining items
         domItems.forEach(el => {
-            if (!CACHED_STATE.order.includes(el.id)) {
-                displayItems.push(el);
-            }
+            if (!CACHED_STATE.order.includes(el.id)) displayItems.push(el);
         });
 
-        // --- Render List ---
+        // Render List
         displayItems.forEach(el => {
             const isHidden = CACHED_STATE.hidden.includes(el.id);
             const li = document.createElement("li");
