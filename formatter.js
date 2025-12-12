@@ -1,7 +1,7 @@
 
 // ================= CONFIG =================
 const PANEL_TITLE = "Sidebar Menu Manager";
-const API_URL = "https://your-api-endpoint.com/save-menu"; //
+const API_URL = "https://theme-customizer-production.up.railway.app/api"
 
 // ================= WAIT FOR SIDEBAR =================
 function waitForSidebar(callback) {
