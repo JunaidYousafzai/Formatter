@@ -1,6 +1,6 @@
 (function() {
     console.clear();
-    console.log("%c🚀 STARTING UNIVERSAL SIDEBAR MANAGER...", "background: #7c3aed; color: white; font-weight: bold; padding: 4px;");
+    console.log("%c🚀 STARTING FINAL SYNCED SIDEBAR MANAGER...", "background: #7c3aed; color: white; font-weight: bold; padding: 4px;");
 
     const CONFIG = {
         PANEL_TITLE: "Sidebar Manager",
@@ -11,35 +11,25 @@
     let CACHED_STATE = { order: [], hidden: [], isLoaded: false };
     let isApplying = false;
 
-    // ================= 1. UNIVERSAL ID LOGIC =================
+    // ================= 1. HELPERS =================
     function getLocationId() {
-        // 1. Try Sub-Account (URL Path)
-        // Matches /v2/location/xxxx or /location/xxxx
-        const match = window.location.pathname.match(/\/location\/([a-zA-Z0-9]+)/);
-        if (match && match[1]) {
-            return match[1];
-        }
+        const path = window.location.pathname;
+        let match = path.match(/\/location\/([a-zA-Z0-9]+)/);
+        if (match && match[1]) return match[1];
 
-        // 2. Try Query Params (common in older GHL pages)
         const params = new URLSearchParams(window.location.search);
-        if (params.get('locationId')) {
-            return params.get('locationId');
-        }
-
-        // 3. Agency Fallback (Derived from Hostname)
-        // If we are NOT in a location, we assume we are in Agency View.
-        // We generate the ID based on the domain (e.g., sandbox.100msaas.com -> agency_sandbox_100msaas_com)
+        if (params.get('locationId')) return params.get('locationId');
+        
         const domain = window.location.hostname;
         const cleanDomain = domain.replace(/^www\./, '').replace(/\./g, '_');
         return `agency_${cleanDomain}`;
     }
 
     function findSidebar() {
-        // Broad search to match both Agency and Sub-account sidebars
         return document.querySelector('#sidebar-v2 nav') || 
                document.querySelector('.sidebar-v2-location nav') ||
                document.querySelector('.hl_nav-header nav') ||
-               document.querySelector('nav'); // Fallback
+               document.querySelector('nav'); 
     }
 
     function getLabel(el) {
@@ -47,7 +37,7 @@
         return textNode ? textNode.innerText.trim() : (el.innerText.trim() || el.id);
     }
 
-    // ================= 2. API FUNCTIONS =================
+    // ================= 2. API FUNCTIONS (LOGGING RESTORED) =================
     async function fetchMenuData() {
         const id = getLocationId();
         console.log(`📥 Fetching config for: ${id}`);
@@ -58,13 +48,17 @@
                 headers: { 'Content-Type': 'application/json', 'x-theme-key': CONFIG.AUTH_TOKEN }
             });
             
-            if (res.status === 404) return;
+            if (res.status === 404) {
+                console.log("⚠️ No config found (404). Starting fresh.");
+                return;
+            }
+            
             const raw = await res.json();
+            console.log("📦 RAW API RESPONSE:", raw); // ✅ LOG RESTORED
 
             let newOrder = [];
             let newHidden = [];
 
-            // Handle your specific response structure
             if (raw.sideMenuContent) {
                 newOrder = raw.sideMenuContent.order || [];
                 newHidden = raw.sideMenuContent.hidden || [];
@@ -76,11 +70,15 @@
             CACHED_STATE.order = newOrder;
             CACHED_STATE.hidden = newHidden;
             CACHED_STATE.isLoaded = true;
-            console.log("✅ Config Loaded:", CACHED_STATE);
+            console.log("✅ State Loaded & Cached:", CACHED_STATE);
             
             // Force apply immediately
             const nav = findSidebar();
-            if(nav) applyDOMChanges(nav);
+            if(nav) {
+                applyDOMChanges(nav);
+                // If panel exists, refresh it to match new data
+                if(document.getElementById("ghl-sidebar-manager")) createPanel(nav);
+            }
 
         } catch (err) {
             console.error("API Error:", err);
@@ -89,15 +87,22 @@
 
     function postMenuData(order, hidden) {
         const id = getLocationId();
+        
+        // Optimistic Update
         CACHED_STATE.order = order;
         CACHED_STATE.hidden = hidden;
         CACHED_STATE.isLoaded = true;
+
+        console.log("📤 Saving Data...", { order, hidden });
 
         fetch(`${CONFIG.API_BASE}/side-menu/save/${id}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'x-theme-key': CONFIG.AUTH_TOKEN },
             body: JSON.stringify({ order, hidden })
-        }).then(() => {
+        }).then(async (res) => {
+            const json = await res.json();
+            console.log("✅ Save Response:", json); // ✅ LOG RESTORED
+            
             const btn = document.getElementById('ghl-save-btn');
             if(btn) { btn.innerText = "Saved! ✅"; setTimeout(() => btn.innerText = "Save Changes", 2000); }
         });
@@ -105,19 +110,21 @@
 
     function resetMenuData() {
         if(!confirm("Reset layout?")) return;
-        fetch(`${CONFIG.API_BASE}/side-menu/${getLocationId()}`, {
+        const id = getLocationId();
+        console.log(`🗑️ Resetting ${id}...`);
+        
+        fetch(`${CONFIG.API_BASE}/side-menu/${id}`, {
             method: 'DELETE',
             headers: { 'Content-Type': 'application/json', 'x-theme-key': CONFIG.AUTH_TOKEN }
         }).then(() => location.reload());
     }
 
-    // ================= 3. CSS ENFORCER (STABLE) =================
+    // ================= 3. CSS ENFORCER =================
     function applyDOMChanges(nav) {
         if (!CACHED_STATE.isLoaded || !nav) return;
 
         const { order, hidden } = CACHED_STATE;
 
-        // Ensure flex container
         nav.style.display = "flex";
         nav.style.flexDirection = "column";
 
@@ -150,9 +157,10 @@
         });
     }
 
-    // ================= 4. UI PANEL =================
+    // ================= 4. UI PANEL (FIXED SORTING) =================
     function createPanel(nav) {
-        if (document.getElementById("ghl-sidebar-manager")) return;
+        const existing = document.getElementById("ghl-sidebar-manager");
+        if (existing) existing.remove();
 
         const panel = document.createElement("div");
         panel.id = "ghl-sidebar-manager";
@@ -178,9 +186,28 @@
         document.body.appendChild(panel);
 
         const list = panel.querySelector("#ghl-sort-list");
-        const items = Array.from(nav.querySelectorAll('li, a')).filter(el => el.id && (el.id.includes('sb_') || el.id.includes('menu')));
+        
+        // --- ⚡ CRITICAL FIX: Merge Saved Order with DOM items ---
+        const domItems = Array.from(nav.querySelectorAll('li, a')).filter(el => el.id && (el.id.includes('sb_') || el.id.includes('menu')));
+        let displayItems = [];
 
-        items.forEach(el => {
+        // 1. Add saved items first (in saved order)
+        CACHED_STATE.order.forEach(savedId => {
+            const found = domItems.find(el => el.id === savedId);
+            if (found) {
+                displayItems.push(found);
+            }
+        });
+
+        // 2. Add any remaining DOM items that weren't in the save list (new features etc)
+        domItems.forEach(el => {
+            if (!CACHED_STATE.order.includes(el.id)) {
+                displayItems.push(el);
+            }
+        });
+
+        // --- Render List ---
+        displayItems.forEach(el => {
             const isHidden = CACHED_STATE.hidden.includes(el.id);
             const li = document.createElement("li");
             li.dataset.id = el.id;
