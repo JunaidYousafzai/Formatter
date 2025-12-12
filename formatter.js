@@ -1,6 +1,6 @@
 (function() {
     console.clear();
-    console.log("%c🚀 STARTING VERBOSE DEBUG SIDEBAR MANAGER...", "background: blue; color: white; padding: 4px;");
+    console.log("%c🚀 STARTING FINAL FIX (Structure Agnostic)...", "background: #7c3aed; color: white; padding: 4px; border-radius: 4px;");
 
     const CONFIG = {
         PANEL_TITLE: "Sidebar Manager",
@@ -22,7 +22,6 @@
     function getLocationId() {
         const match = window.location.pathname.match(/\/location\/([a-zA-Z0-9]+)/);
         const loc = (match && match[1]) ? match[1] : 'qzPk2iMXCzGuEt5FA6Ll';
-        console.log(`📍 Location ID detected: ${loc}`);
         return loc;
     }
 
@@ -37,48 +36,48 @@
         return textNode ? textNode.innerText.trim() : (el.innerText.trim() || el.id);
     }
 
-    // ================= 2. API FUNCTIONS (WITH LOGGING) =================
+    // ================= 2. API FUNCTIONS (THE FIX) =================
     async function fetchMenuData() {
-        const url = `${CONFIG.API_BASE}/side-menu/${getLocationId()}?t=${Date.now()}`; // Cache buster
-        console.log(`📥 GET Request: ${url}`);
-
+        const url = `${CONFIG.API_BASE}/side-menu/${getLocationId()}?t=${Date.now()}`; 
+        
         try {
             const res = await fetch(url, {
                 headers: { 'Content-Type': 'application/json', 'x-theme-key': CONFIG.AUTH_TOKEN }
             });
             
             if (res.status === 404) {
-                console.warn("⚠️ API returned 404 (No saved menu found). Using defaults.");
+                console.warn("⚠️ No saved config found (404).");
                 return; 
             }
 
             const rawData = await res.json();
             console.log("📥 RAW API RESPONSE:", rawData);
 
-            // HANDLE DIFFERENT RESPONSE STRUCTURES
-            let finalOrder = [];
-            let finalHidden = [];
+            // --- 🔎 INTELLIGENT DATA FINDER ---
+            // Look for 'order' array anywhere in the response
+            let foundOrder = [];
+            let foundHidden = [];
 
             if (Array.isArray(rawData.order)) {
-                // Structure: { order: [...], hidden: [...] }
-                finalOrder = rawData.order;
-                finalHidden = rawData.hidden;
+                foundOrder = rawData.order;
+                foundHidden = rawData.hidden;
             } else if (rawData.data && Array.isArray(rawData.data.order)) {
-                // Structure: { success: true, data: { order: [...] } }
-                finalOrder = rawData.data.order;
-                finalHidden = rawData.data.hidden;
+                foundOrder = rawData.data.order;
+                foundHidden = rawData.data.hidden;
+            } else if (rawData.updatedMenu && Array.isArray(rawData.updatedMenu.order)) {
+                foundOrder = rawData.updatedMenu.order;
+                foundHidden = rawData.updatedMenu.hidden;
             } else if (rawData.menu && Array.isArray(rawData.menu.order)) {
-                // Structure: { menu: { order: [...] } }
-                finalOrder = rawData.menu.order;
-                finalHidden = rawData.menu.hidden;
+                foundOrder = rawData.menu.order;
+                foundHidden = rawData.menu.hidden;
             }
 
             // Update Cache
-            CACHED_STATE.order = finalOrder || [];
-            CACHED_STATE.hidden = finalHidden || [];
+            CACHED_STATE.order = foundOrder || [];
+            CACHED_STATE.hidden = foundHidden || [];
             CACHED_STATE.isLoaded = true;
             
-            console.log("✅ State Updated:", CACHED_STATE);
+            console.log("✅ State Loaded:", CACHED_STATE);
             
             // Trigger immediate application
             const nav = findSidebar();
@@ -90,7 +89,7 @@
     }
 
     function postMenuData(order, hidden) {
-        // Update Local State Immediately
+        // Update Local State Immediately (Optimistic UI)
         CACHED_STATE.order = order;
         CACHED_STATE.hidden = hidden;
         CACHED_STATE.isLoaded = true;
@@ -98,8 +97,7 @@
         const url = `${CONFIG.API_BASE}/side-menu/save/${getLocationId()}`;
         const payload = { order, hidden };
         
-        console.log(`📤 POST Request: ${url}`);
-        console.log("📦 Payload:", payload);
+        console.log(`📤 POST Request: ${url}`, payload);
 
         fetch(url, {
             method: 'POST',
@@ -110,7 +108,14 @@
         .then(data => {
             console.log("✅ Save Response:", data);
             const btn = document.getElementById('ghl-save-btn');
-            if(btn) { btn.innerText = "Saved! ✅"; setTimeout(() => btn.innerText = "Save Changes", 2000); }
+            if(btn) { 
+                btn.innerText = "Saved! ✅"; 
+                btn.style.background = "#10B981"; 
+                setTimeout(() => {
+                    btn.innerText = "Save Changes";
+                    btn.style.background = "#3b82f6";
+                }, 2000); 
+            }
         })
         .catch(err => console.error("❌ Save Failed:", err));
     }
@@ -118,7 +123,6 @@
     function resetMenuData() {
         if(!confirm("Reset sidebar to default?")) return;
         const url = `${CONFIG.API_BASE}/side-menu/${getLocationId()}`;
-        console.log(`🗑️ DELETE Request: ${url}`);
 
         fetch(url, {
             method: 'DELETE',
@@ -135,21 +139,18 @@
     function applyDOMChanges(nav) {
         if (!CACHED_STATE.isLoaded || !nav || isApplyingChanges) return;
         
-        // Don't apply if arrays are empty
         if (CACHED_STATE.order.length === 0 && CACHED_STATE.hidden.length === 0) {
-            console.log("ℹ️ No custom order/hidden items to apply.");
             return;
         }
 
-        // console.log("⚙️ Applying changes to DOM...");
         isApplyingChanges = true;
-
         const { order, hidden } = CACHED_STATE;
 
         // 1. Enforce Order
         if (order.length > 0) {
             order.forEach(id => {
                 const el = document.getElementById(id);
+                // Move the LI wrapper if it exists, otherwise the element itself
                 const container = el ? (el.closest('li') || el) : null;
                 if (container && container.parentElement === nav) {
                      nav.appendChild(container); 
@@ -158,18 +159,20 @@
         }
 
         // 2. Enforce Visibility
+        // First unhide all valid menu items
         nav.querySelectorAll('li, a').forEach(el => {
-            // Unhide everything first
-            el.style.display = ''; 
+            if(el.id && (el.id.includes('sb_') || el.id.includes('menu'))) {
+                 el.style.display = ''; 
+            }
         });
 
+        // Then hide specific items
         hidden.forEach(id => {
             const el = document.getElementById(id);
             const container = el ? (el.closest('li') || el) : null;
             if(container) container.style.display = 'none';
         });
 
-        // Unlock
         setTimeout(() => isApplyingChanges = false, 50);
     }
 
@@ -201,7 +204,10 @@
         document.body.appendChild(panel);
 
         const list = panel.querySelector("#ghl-sort-list");
-        const items = Array.from(nav.querySelectorAll('li, a')).filter(el => el.id && (el.id.includes('sb_') || el.id.includes('menu')));
+        
+        // Get valid menu items
+        const items = Array.from(nav.querySelectorAll('li, a'))
+            .filter(el => el.id && (el.id.includes('sb_') || el.id.includes('menu')));
 
         items.forEach(el => {
             const isHidden = CACHED_STATE.hidden.includes(el.id);
@@ -223,11 +229,13 @@
                 </button>
             `;
 
+            // Toggle Click
             li.querySelector('.toggle-eye').addEventListener('click', (e) => {
                 const btn = e.target;
                 const hide = btn.innerText === '👁️';
                 btn.innerText = hide ? '🙈' : '👁️';
                 li.style.background = hide ? '#fee2e2' : '#f3f4f6';
+                li.style.borderColor = hide ? '#fecaca' : '#e5e7eb';
                 
                 // Immediate Preview
                 const domEl = document.getElementById(el.id);
@@ -238,10 +246,11 @@
             // Drag Events
             li.addEventListener('dragstart', () => li.classList.add('dragging'));
             li.addEventListener('dragend', () => li.classList.remove('dragging'));
+
             list.appendChild(li);
         });
 
-        // Drag Over
+        // Drag Over Logic
         list.addEventListener('dragover', e => {
             e.preventDefault();
             const dragging = list.querySelector('.dragging');
@@ -253,7 +262,10 @@
         // Save
         document.getElementById('ghl-save-btn').addEventListener('click', () => {
             const newOrder = [...list.querySelectorAll('li')].map(li => li.dataset.id);
-            const newHidden = [...list.querySelectorAll('li')].filter(li => li.querySelector('.toggle-eye').innerText === '🙈').map(li => li.dataset.id);
+            const newHidden = [...list.querySelectorAll('li')]
+                .filter(li => li.querySelector('.toggle-eye').innerText === '🙈')
+                .map(li => li.dataset.id);
+            
             postMenuData(newOrder, newHidden);
             applyDOMChanges(nav); 
         });
@@ -275,7 +287,7 @@
                 applyDOMChanges(nav);
                 createPanel(nav);
 
-                // Start Observer to fight GHL re-renders
+                // Observer to persist changes
                 if (sidebarObserver) sidebarObserver.disconnect();
                 sidebarObserver = new MutationObserver(() => {
                     if (isApplyingChanges) return; 
