@@ -1,134 +1,187 @@
 (function() {
     console.clear();
-    console.log("🚀 Starting Sidebar Manager (Fixed Save)...");
+    console.log("🚀 Starting Sidebar Menu Manager (API Connected)...");
 
     // ================= CONFIGURATION =================
     const CONFIG = {
-        PANEL_TITLE: "Sidebar Manager",
-        // ✅ Your Real API Base
+        PANEL_TITLE: "Sidebar Menu Manager",
+        // ✅ Real API Base URL
         API_BASE: "https://theme-customizer-production.up.railway.app/api", 
-        AUTH_TOKEN: window.TOKEN || "test-token" // GHL Token
+        // Get Token from GHL window object or default to empty string if missing
+        AUTH_TOKEN: window.TOKEN || "" 
     };
 
-    // ================= 1. HELPERS =================
+    // ================= 1. HELPER: GET LOCATION ID =================
     function getLocationId() {
+        // 1. Try URL path (most reliable for sub-accounts)
         const match = window.location.pathname.match(/\/location\/([a-zA-Z0-9]+)/);
-        return (match && match[1]) ? match[1] : 'qzPk2iMXCzGuEt5FA6Ll'; // Fallback to your test ID
+        if (match && match[1]) return match[1];
+        
+        // 2. Try URL Query Params
+        const params = new URLSearchParams(window.location.search);
+        if (params.get('locationId')) return params.get('locationId');
+        
+        // 3. Fallback for testing
+        console.warn("Could not detect Location ID. Using fallback.");
+        return 'qzPk2iMXCzGuEt5FA6Ll'; 
     }
 
-    function findSidebar() {
-        return document.querySelector('#sidebar-v2 nav') || 
-               document.querySelector('.sidebar-v2-location nav') ||
-               document.querySelector('.hl_nav-header nav');
+    // ================= 2. HELPER: ROBUST SIDEBAR FINDER =================
+    function waitForSidebar(callback) {
+        let attempts = 0;
+        const check = setInterval(() => {
+            attempts++;
+            // Try standard selectors for GHL v1 and v2 sidebars
+            const nav = document.querySelector('#sidebar-v2 nav') || 
+                        document.querySelector('.sidebar-v2-location nav') ||
+                        document.querySelector('.hl_nav-header nav');
+
+            if (nav && nav.querySelectorAll('li').length > 0) {
+                clearInterval(check);
+                console.log("✅ Sidebar found!");
+                callback(nav);
+            } else if (attempts > 30) { // Stop after 10 seconds
+                clearInterval(check);
+                console.error("❌ Sidebar not found. Aborting.");
+                alert("Error: Could not find sidebar navigation.");
+            }
+        }, 300);
     }
 
-    function getLabel(el) {
-        if (!el) return "Unknown";
-        // Try getting text from span/div children to avoid grabbing icon text
-        const textNode = el.querySelector('span, div');
-        return textNode ? textNode.innerText.trim() : (el.innerText.trim() || el.id);
-    }
-
-    // ================= 2. API FUNCTIONS =================
+    // ================= 3. API FUNCTIONS =================
+    
+    // --- GET (Load) ---
     async function fetchMenuData() {
         const locationId = getLocationId();
         const url = `${CONFIG.API_BASE}/side-menu/${locationId}`;
-        console.log(`📥 Fetching from: ${url}`);
-        
+        console.log("📥 Fetching config from:", url);
+
         try {
             const res = await fetch(url, {
-                headers: { 'Content-Type': 'application/json', 'x-theme-key': CONFIG.AUTH_TOKEN }
+                method: 'GET',
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'x-theme-key': CONFIG.AUTH_TOKEN
+                }
             });
-            if (res.status === 404) return null; 
+            
+            // If 404, it just means no config exists yet (clean slate)
+            if (res.status === 404) return { order: [], hidden: [] };
+            if (!res.ok) throw new Error(`API Error ${res.status}`);
+            
             return await res.json();
         } catch (err) {
-            console.warn("API Error (using local defaults):", err);
-            return null;
+            console.warn("⚠️ API Fetch failed (using defaults):", err);
+            return { order: [], hidden: [] };
         }
     }
 
-    function postMenuData(order, hidden) {
+    // --- POST (Save) ---
+    function postMenuData(order, hiddenItems) {
         const locationId = getLocationId();
-        // ✅ CORRECT URL STRUCTURE
         const url = `${CONFIG.API_BASE}/side-menu/save/${locationId}`;
-        
-        // ✅ CORRECT BODY STRUCTURE
-        const payload = { 
-            order: order, 
-            hidden: hidden 
-        };
+        const payload = { order: order, hidden: hiddenItems };
 
-        console.log(`📤 Sending POST to: ${url}`);
-        console.log("📦 Payload Body:", JSON.stringify(payload, null, 2));
+        console.log("📤 Saving config to:", url);
 
         fetch(url, {
             method: 'POST',
             headers: { 
-                'Content-Type': 'application/json', 
-                'x-theme-key': CONFIG.AUTH_TOKEN 
+                'Content-Type': 'application/json',
+                'x-theme-key': CONFIG.AUTH_TOKEN
             },
             body: JSON.stringify(payload)
         })
         .then(res => res.json())
         .then(data => {
-            console.log("✅ API Response:", data);
-            const btn = document.getElementById('ghl-save-btn');
-            if(btn) { 
-                btn.innerText = "Saved! ✅"; 
-                btn.style.background = "#10B981"; // Green
+            console.log("✅ Data saved:", data);
+            const title = document.querySelector("#drag-drop-title");
+            if(title) {
+                const oldText = title.innerText;
+                title.innerText = "Saved Successfully! ✅";
+                title.style.color = "green";
                 setTimeout(() => {
-                    btn.innerText = "Save Changes";
-                    btn.style.background = "#3b82f6"; // Blue
-                }, 2000); 
+                    title.innerText = oldText;
+                    title.style.color = "inherit";
+                }, 2000);
             }
         })
         .catch(err => {
-            console.error("❌ Save Failed:", err);
-            alert("Save failed. Check console.");
+            console.error("❌ Save failed:", err);
+            alert("Failed to save menu configuration.");
         });
     }
 
+    // --- DELETE (Reset) ---
     function resetMenuData() {
         const locationId = getLocationId();
-        if(!confirm("Reset sidebar to default?")) return;
-        
-        fetch(`${CONFIG.API_BASE}/side-menu/${locationId}`, {
+        const url = `${CONFIG.API_BASE}/side-menu/${locationId}`;
+
+        if(!confirm("Are you sure you want to reset the sidebar to default?")) return;
+
+        console.log("🗑️ Resetting config at:", url);
+
+        fetch(url, {
             method: 'DELETE',
-            headers: { 'Content-Type': 'application/json', 'x-theme-key': CONFIG.AUTH_TOKEN }
-        }).then(() => location.reload());
+            headers: { 
+                'Content-Type': 'application/json',
+                'x-theme-key': CONFIG.AUTH_TOKEN
+            }
+        })
+        .then(() => {
+            console.log("✅ Reset successful. Reloading...");
+            location.reload(); 
+        })
+        .catch(err => {
+            console.error("❌ Reset failed:", err);
+            alert("Failed to reset menu.");
+        });
     }
 
-    // ================= 3. DOM MANIPULATION =================
-    function applyDOMChanges(nav, order, hidden) {
-        // 1. Reorder
-        if (order && order.length > 0) {
-            order.forEach(id => {
+    // ================= 4. DOM MANIPULATION =================
+    function applySavedOrder(nav, savedOrder, hiddenItems) {
+        if (!nav) return;
+
+        // 1. Apply Order (Move elements)
+        if (savedOrder && savedOrder.length > 0) {
+            savedOrder.forEach(id => {
                 const el = document.getElementById(id);
-                // Move the LI wrapper if it exists, otherwise the element
-                const container = el ? (el.closest('li') || el) : null;
-                if (container && container.parentElement === nav) {
-                    nav.appendChild(container);
+                if (!el) return;
+                // Move the LI wrapper if it exists, otherwise the element itself
+                const parent = el.closest('li') || el.closest('a');
+                if (parent && parent.parentElement === nav) {
+                    nav.appendChild(parent);
                 }
             });
         }
-        // 2. Hide/Show
-        if (hidden && hidden.length > 0) {
-            hidden.forEach(id => {
+
+        // 2. Apply Visibility (Hide items)
+        // First reset all to visible
+        nav.querySelectorAll('[id]').forEach(item => {
+            if(!item.id.startsWith('sb_') && !item.id.includes('menu')) return;
+            const parent = item.closest('li') || item.closest('a');
+            if (parent) parent.style.display = '';
+        });
+
+        // Then hide specific ones
+        if (hiddenItems && hiddenItems.length > 0) {
+            hiddenItems.forEach(id => {
                 const el = document.getElementById(id);
-                const container = el ? (el.closest('li') || el) : null;
-                if(container) container.style.display = 'none';
+                if (!el) return;
+                const parent = el.closest('li') || el.closest('a');
+                if (parent) parent.style.display = 'none';
             });
         }
     }
 
-    // ================= 4. UI PANEL CREATION =================
-    function createPanel(nav, order, hidden) {
+    // ================= 5. UI PANEL CREATION =================
+    function createDragDropPanel(nav, initialOrder, initialHidden) {
+        // Clean up previous instances
         const existing = document.getElementById("ghl-sidebar-manager");
-        if (existing) existing.remove();
+        if(existing) existing.remove();
 
         const panel = document.createElement("div");
         panel.id = "ghl-sidebar-manager";
-        // Styling to ensure it floats above everything
         panel.style.cssText = `
             position: fixed; top: 100px; right: 20px; width: 300px;
             background: white; border: 1px solid #ccc; z-index: 99999999;
@@ -137,32 +190,45 @@
         `;
 
         panel.innerHTML = `
-            <div style="display:flex; justify-content:space-between; margin-bottom:12px;">
-                <h3 style="margin:0; font-size:16px; font-weight:bold;">${CONFIG.PANEL_TITLE}</h3>
+            <div style="display:flex; justify-content:space-between; margin-bottom:12px; border-bottom:1px solid #eee; padding-bottom:8px;">
+                <h3 id="drag-drop-title" style="margin:0; font-size:16px; font-weight:bold;">${CONFIG.PANEL_TITLE}</h3>
                 <button id="ghl-close-btn" style="border:none; bg:transparent; cursor:pointer;">❌</button>
             </div>
-            <div style="margin-bottom:10px; font-size:12px; color:#666;">
-                Location ID: <b>${getLocationId()}</b>
-            </div>
-            <ul id="ghl-sort-list" style="list-style:none; padding:0; margin:0;"></ul>
+            <p style="font-size:12px; color:#666; margin-bottom:10px;">
+                Drag to reorder. Click eye to toggle visibility.<br>
+                <b>Location:</b> ${getLocationId()}
+            </p>
+            <ul id="orderList" style="list-style:none; padding:0; margin:0;"></ul>
             <div style="display:flex; gap:10px; margin-top:15px;">
-                <button id="ghl-save-btn" style="flex:1; padding:8px; background:#3b82f6; color:white; border:none; border-radius:4px; cursor:pointer; font-weight:bold;">Save Changes</button>
-                <button id="ghl-reset-btn" style="width:30%; padding:8px; background:#ef4444; color:white; border:none; border-radius:4px; cursor:pointer;">Reset</button>
+                <button id="save-btn" style="flex:1; padding:8px; background:#3b82f6; color:white; border:none; border-radius:4px; cursor:pointer; font-weight:bold;">Save Changes</button>
+                <button id="reset-btn" style="width:30%; padding:8px; background:#ef4444; color:white; border:none; border-radius:4px; cursor:pointer;">Reset</button>
             </div>
         `;
         document.body.appendChild(panel);
 
-        // --- Populate List ---
-        const list = panel.querySelector("#ghl-sort-list");
-        // Get valid menu items (filter out random GHL elements)
-        const items = Array.from(nav.querySelectorAll('a, li'))
-            .filter(el => el.id && (el.id.startsWith('sb_') || el.id.includes('menu')));
+        const list = panel.querySelector("#orderList");
+        
+        // Populate List from DOM (which is already ordered by applySavedOrder)
+        // We filter for elements that have IDs starting with 'sb_' or containing 'menu' to avoid grabbing random UI elements
+        const sidebarItems = Array.from(nav.querySelectorAll('[id]')).filter(el => {
+            return (el.id.startsWith('sb_') || el.id.includes('menu')) && el.offsetParent !== null; // attempt to only get visible structural items
+        });
 
-        items.forEach(el => {
-            const isHidden = hidden.includes(el.id);
+        // Fallback if filter is too strict: get all LIs with IDs
+        const itemsToProcess = sidebarItems.length > 0 ? sidebarItems : nav.querySelectorAll('li[id], a[id]');
+
+        itemsToProcess.forEach(item => {
             const li = document.createElement("li");
-            li.dataset.id = el.id; // CRITICAL: Storing ID for scraping later
+            li.dataset.id = item.id;
             li.draggable = true;
+            
+            const isHidden = initialHidden.includes(item.id);
+            
+            // Get label text safely
+            let label = item.innerText.trim();
+            if(!label) label = item.getAttribute('title') || item.id;
+            if(label.length > 25) label = label.substring(0, 22) + "...";
+
             li.style.cssText = `
                 padding: 10px; margin-bottom: 6px; border-radius: 6px;
                 background: ${isHidden ? '#fee2e2' : '#f3f4f6'};
@@ -170,28 +236,31 @@
                 display: flex; justify-content: space-between; align-items: center;
                 cursor: grab; transition: all 0.2s;
             `;
-            
+
             li.innerHTML = `
-                <span style="font-size:13px; font-weight:500;">${getLabel(el)}</span>
+                <span style="font-size:13px; font-weight:500;">${label}</span>
                 <button class="toggle-eye" style="border:none; background:transparent; cursor:pointer; font-size:16px;">
                     ${isHidden ? '🙈' : '👁️'}
                 </button>
             `;
 
-            // Toggle Click
+            // --- Toggle Visibility ---
             li.querySelector('.toggle-eye').addEventListener('click', (e) => {
+                e.stopPropagation();
                 const btn = e.target;
-                const hide = btn.innerText === '👁️';
-                btn.innerText = hide ? '🙈' : '👁️';
-                li.style.background = hide ? '#fee2e2' : '#f3f4f6';
-                li.style.borderColor = hide ? '#fecaca' : '#e5e7eb';
-                // Immediate preview in DOM
-                const domEl = document.getElementById(el.id);
-                const container = domEl ? (domEl.closest('li') || domEl) : null;
-                if(container) container.style.display = hide ? 'none' : ''; 
+                const nowHidden = btn.innerText === '👁️';
+                
+                btn.innerText = nowHidden ? '🙈' : '👁️';
+                li.style.background = nowHidden ? '#fee2e2' : '#f3f4f6';
+                li.style.border = nowHidden ? '1px solid #fecaca' : '1px solid #e5e7eb';
+                
+                // Immediate Preview
+                const domEl = document.getElementById(item.id);
+                const domParent = domEl ? (domEl.closest('li') || domEl.closest('a')) : null;
+                if(domParent) domParent.style.display = nowHidden ? 'none' : '';
             });
 
-            // Drag Events
+            // --- Drag Events ---
             li.addEventListener('dragstart', () => li.classList.add('dragging'));
             li.addEventListener('dragend', () => li.classList.remove('dragging'));
 
@@ -207,47 +276,41 @@
             list.insertBefore(dragging, next);
         });
 
-        // --- SAVE BUTTON LOGIC (THE FIX) ---
-        document.getElementById('ghl-save-btn').addEventListener('click', () => {
-            console.log("💾 Save button clicked...");
-            
-            // 1. Scrape Order
-            const listItems = Array.from(list.querySelectorAll('li'));
-            const newOrder = listItems.map(li => li.dataset.id);
-
-            // 2. Scrape Hidden
-            const newHidden = listItems
+        // --- Save Button Click ---
+        document.getElementById('save-btn').addEventListener('click', () => {
+            // Scrape Order
+            const newOrder = [...list.querySelectorAll('li')].map(li => li.dataset.id);
+            // Scrape Hidden
+            const newHidden = [...list.querySelectorAll('li')]
                 .filter(li => li.querySelector('.toggle-eye').innerText === '🙈')
                 .map(li => li.dataset.id);
 
-            // 3. Send to API
+            console.log("💾 Save Clicked. Order:", newOrder.length, "Hidden:", newHidden.length);
+            
+            // 1. Send to API
             postMenuData(newOrder, newHidden);
             
-            // 4. Re-apply to DOM to ensure sync (optional but good practice)
-            applyDOMChanges(nav, newOrder, newHidden);
+            // 2. Ensure DOM is perfectly synced
+            applySavedOrder(nav, newOrder, newHidden);
         });
 
+        // --- Reset & Close ---
+        document.getElementById('reset-btn').addEventListener('click', resetMenuData);
         document.getElementById('ghl-close-btn').addEventListener('click', () => panel.remove());
-        document.getElementById('ghl-reset-btn').addEventListener('click', resetMenuData);
     }
 
-    // ================= 5. INITIALIZATION =================
-    const nav = findSidebar();
-    
-    if (nav) {
-        console.log("✅ Sidebar Found:", nav);
-        fetchMenuData().then(data => {
-            const order = data?.order || [];
-            const hidden = data?.hidden || [];
+    // ================= 6. INIT SEQUENCE =================
+    waitForSidebar(async (nav) => {
+        // 1. Get Data
+        const apiData = await fetchMenuData();
+        const savedOrder = apiData.order || [];
+        const hiddenItems = apiData.hidden || [];
 
-            // Apply initial state
-            applyDOMChanges(nav, order, hidden);
-            
-            // Draw Panel
-            createPanel(nav, order, hidden);
-        });
-    } else {
-        alert("❌ Error: Could not find GHL Sidebar. Is the page fully loaded?");
-    }
+        // 2. Apply Data (Visual Update)
+        applySavedOrder(nav, savedOrder, hiddenItems);
+
+        // 3. Render Panel
+        createDragDropPanel(nav, savedOrder, hiddenItems);
+    });
 
 })();
