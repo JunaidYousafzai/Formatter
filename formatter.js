@@ -1,6 +1,6 @@
 (function() {
     console.clear();
-    console.log("🚀 Starting Sidebar Enforcer (MutationObserver Version)...");
+    console.log("%c🚀 STARTING VERBOSE DEBUG SIDEBAR MANAGER...", "background: blue; color: white; padding: 4px;");
 
     const CONFIG = {
         PANEL_TITLE: "Sidebar Manager",
@@ -8,21 +8,22 @@
         AUTH_TOKEN: window.TOKEN || "" 
     };
 
-    // Global State to hold data without re-fetching
+    // Global State
     let CACHED_STATE = {
         order: [],
         hidden: [],
         isLoaded: false
     };
 
-    // To prevent infinite loops when we modify the DOM
     let isApplyingChanges = false;
     let sidebarObserver = null;
 
     // ================= 1. HELPERS =================
     function getLocationId() {
         const match = window.location.pathname.match(/\/location\/([a-zA-Z0-9]+)/);
-        return (match && match[1]) ? match[1] : 'qzPk2iMXCzGuEt5FA6Ll'; 
+        const loc = (match && match[1]) ? match[1] : 'qzPk2iMXCzGuEt5FA6Ll';
+        console.log(`📍 Location ID detected: ${loc}`);
+        return loc;
     }
 
     function findSidebar() {
@@ -36,70 +37,120 @@
         return textNode ? textNode.innerText.trim() : (el.innerText.trim() || el.id);
     }
 
-    // ================= 2. API FUNCTIONS =================
+    // ================= 2. API FUNCTIONS (WITH LOGGING) =================
     async function fetchMenuData() {
+        const url = `${CONFIG.API_BASE}/side-menu/${getLocationId()}?t=${Date.now()}`; // Cache buster
+        console.log(`📥 GET Request: ${url}`);
+
         try {
-            const res = await fetch(`${CONFIG.API_BASE}/side-menu/${getLocationId()}`, {
+            const res = await fetch(url, {
                 headers: { 'Content-Type': 'application/json', 'x-theme-key': CONFIG.AUTH_TOKEN }
             });
-            if (res.status === 404) return; 
-            const data = await res.json();
             
+            if (res.status === 404) {
+                console.warn("⚠️ API returned 404 (No saved menu found). Using defaults.");
+                return; 
+            }
+
+            const rawData = await res.json();
+            console.log("📥 RAW API RESPONSE:", rawData);
+
+            // HANDLE DIFFERENT RESPONSE STRUCTURES
+            let finalOrder = [];
+            let finalHidden = [];
+
+            if (Array.isArray(rawData.order)) {
+                // Structure: { order: [...], hidden: [...] }
+                finalOrder = rawData.order;
+                finalHidden = rawData.hidden;
+            } else if (rawData.data && Array.isArray(rawData.data.order)) {
+                // Structure: { success: true, data: { order: [...] } }
+                finalOrder = rawData.data.order;
+                finalHidden = rawData.data.hidden;
+            } else if (rawData.menu && Array.isArray(rawData.menu.order)) {
+                // Structure: { menu: { order: [...] } }
+                finalOrder = rawData.menu.order;
+                finalHidden = rawData.menu.hidden;
+            }
+
             // Update Cache
-            CACHED_STATE.order = data.order || [];
-            CACHED_STATE.hidden = data.hidden || [];
+            CACHED_STATE.order = finalOrder || [];
+            CACHED_STATE.hidden = finalHidden || [];
             CACHED_STATE.isLoaded = true;
-            console.log("✅ Config Loaded:", CACHED_STATE);
+            
+            console.log("✅ State Updated:", CACHED_STATE);
             
             // Trigger immediate application
             const nav = findSidebar();
             if(nav) applyDOMChanges(nav);
 
         } catch (err) {
-            console.warn("API Error:", err);
+            console.error("❌ API Fetch Error:", err);
         }
     }
 
     function postMenuData(order, hidden) {
+        // Update Local State Immediately
         CACHED_STATE.order = order;
         CACHED_STATE.hidden = hidden;
+        CACHED_STATE.isLoaded = true;
 
-        fetch(`${CONFIG.API_BASE}/side-menu/save/${getLocationId()}`, {
+        const url = `${CONFIG.API_BASE}/side-menu/save/${getLocationId()}`;
+        const payload = { order, hidden };
+        
+        console.log(`📤 POST Request: ${url}`);
+        console.log("📦 Payload:", payload);
+
+        fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'x-theme-key': CONFIG.AUTH_TOKEN },
-            body: JSON.stringify({ order, hidden })
-        }).then(() => {
+            body: JSON.stringify(payload)
+        })
+        .then(res => res.json())
+        .then(data => {
+            console.log("✅ Save Response:", data);
             const btn = document.getElementById('ghl-save-btn');
             if(btn) { btn.innerText = "Saved! ✅"; setTimeout(() => btn.innerText = "Save Changes", 2000); }
-        });
+        })
+        .catch(err => console.error("❌ Save Failed:", err));
     }
 
     function resetMenuData() {
         if(!confirm("Reset sidebar to default?")) return;
-        fetch(`${CONFIG.API_BASE}/side-menu/${getLocationId()}`, {
+        const url = `${CONFIG.API_BASE}/side-menu/${getLocationId()}`;
+        console.log(`🗑️ DELETE Request: ${url}`);
+
+        fetch(url, {
             method: 'DELETE',
             headers: { 'Content-Type': 'application/json', 'x-theme-key': CONFIG.AUTH_TOKEN }
-        }).then(() => location.reload());
+        })
+        .then(res => res.json())
+        .then(data => {
+            console.log("✅ Reset Response:", data);
+            location.reload();
+        });
     }
 
-    // ================= 3. DOM ENFORCER (The Fix) =================
+    // ================= 3. DOM ENFORCER =================
     function applyDOMChanges(nav) {
         if (!CACHED_STATE.isLoaded || !nav || isApplyingChanges) return;
+        
+        // Don't apply if arrays are empty
+        if (CACHED_STATE.order.length === 0 && CACHED_STATE.hidden.length === 0) {
+            console.log("ℹ️ No custom order/hidden items to apply.");
+            return;
+        }
 
-        // Lock to prevent observer loop
+        // console.log("⚙️ Applying changes to DOM...");
         isApplyingChanges = true;
 
         const { order, hidden } = CACHED_STATE;
 
         // 1. Enforce Order
-        // We appendChild in the saved order. This effectively sorts them.
-        if (order && order.length > 0) {
+        if (order.length > 0) {
             order.forEach(id => {
                 const el = document.getElementById(id);
-                // Get the draggable container (usually the LI)
                 const container = el ? (el.closest('li') || el) : null;
-                
-                // Only move if it is not already in the correct position relative to siblings
                 if (container && container.parentElement === nav) {
                      nav.appendChild(container); 
                 }
@@ -107,10 +158,11 @@
         }
 
         // 2. Enforce Visibility
-        // Show everything first to ensure clean state
-        nav.querySelectorAll('li, a').forEach(el => el.style.display = '');
+        nav.querySelectorAll('li, a').forEach(el => {
+            // Unhide everything first
+            el.style.display = ''; 
+        });
 
-        // Hide specific items
         hidden.forEach(id => {
             const el = document.getElementById(id);
             const container = el ? (el.closest('li') || el) : null;
@@ -140,7 +192,6 @@
                 <h3 style="margin:0; font-size:16px; font-weight:bold;">${CONFIG.PANEL_TITLE}</h3>
                 <button id="ghl-close-btn" style="border:none; bg:transparent; cursor:pointer;">❌</button>
             </div>
-            <p style="font-size:12px; color:#666; margin-bottom:10px;">Drag to reorder.</p>
             <ul id="ghl-sort-list" style="list-style:none; padding:0; margin:0;"></ul>
             <div style="display:flex; gap:10px; margin-top:15px;">
                 <button id="ghl-save-btn" style="flex:1; padding:8px; background:#3b82f6; color:white; border:none; border-radius:4px; cursor:pointer; font-weight:bold;">Save Changes</button>
@@ -150,7 +201,6 @@
         document.body.appendChild(panel);
 
         const list = panel.querySelector("#ghl-sort-list");
-        // Get items based on current DOM state (which is enforced by applyDOMChanges)
         const items = Array.from(nav.querySelectorAll('li, a')).filter(el => el.id && (el.id.includes('sb_') || el.id.includes('menu')));
 
         items.forEach(el => {
@@ -179,7 +229,7 @@
                 btn.innerText = hide ? '🙈' : '👁️';
                 li.style.background = hide ? '#fee2e2' : '#f3f4f6';
                 
-                // Immediate Preview (handled by UI logic temporarily)
+                // Immediate Preview
                 const domEl = document.getElementById(el.id);
                 const container = domEl ? (domEl.closest('li') || domEl) : null;
                 if(container) container.style.display = hide ? 'none' : '';
@@ -188,11 +238,10 @@
             // Drag Events
             li.addEventListener('dragstart', () => li.classList.add('dragging'));
             li.addEventListener('dragend', () => li.classList.remove('dragging'));
-
             list.appendChild(li);
         });
 
-        // Drag Over Logic
+        // Drag Over
         list.addEventListener('dragover', e => {
             e.preventDefault();
             const dragging = list.querySelector('.dragging');
@@ -205,41 +254,36 @@
         document.getElementById('ghl-save-btn').addEventListener('click', () => {
             const newOrder = [...list.querySelectorAll('li')].map(li => li.dataset.id);
             const newHidden = [...list.querySelectorAll('li')].filter(li => li.querySelector('.toggle-eye').innerText === '🙈').map(li => li.dataset.id);
-            
             postMenuData(newOrder, newHidden);
-            applyDOMChanges(nav); // Force apply immediately
+            applyDOMChanges(nav); 
         });
 
         document.getElementById('ghl-close-btn').addEventListener('click', () => panel.remove());
         document.getElementById('ghl-reset-btn').addEventListener('click', resetMenuData);
     }
 
-    // ================= 5. INITIALIZATION & OBSERVER =================
-    // This part ensures we find the sidebar AND keep it updated if GHL refreshes it
+    // ================= 5. MAIN LOOP =================
+    let initComplete = false;
+
     const initInterval = setInterval(async () => {
         const nav = findSidebar();
         
         if (nav) {
-            // Only stop interval if we haven't loaded data yet
-            if (!CACHED_STATE.isLoaded) {
+            if (!initComplete) {
                 console.log("✅ Sidebar Found. Initializing...");
                 await fetchMenuData();
                 applyDOMChanges(nav);
                 createPanel(nav);
 
-                // --- START OBSERVER ---
-                // This watches for GHL overwriting our changes
+                // Start Observer to fight GHL re-renders
                 if (sidebarObserver) sidebarObserver.disconnect();
-                
-                sidebarObserver = new MutationObserver((mutations) => {
-                    if (isApplyingChanges) return; // Ignore our own changes
-                    // console.log("GHL updated sidebar. Re-enforcing order...");
+                sidebarObserver = new MutationObserver(() => {
+                    if (isApplyingChanges) return; 
                     applyDOMChanges(nav);
                 });
-                
                 sidebarObserver.observe(nav, { childList: true, subtree: true });
-                // --- END OBSERVER ---
                 
+                initComplete = true;
                 clearInterval(initInterval);
             }
         }
